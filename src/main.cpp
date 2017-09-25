@@ -297,13 +297,19 @@ int main() {
             vector<double> tkptsx;
             vector<double> tkptsy;
 
-            if(path_size == 0)
+            if(path_size < 2)
             {
                 // Current car pos serves as the left-over points
                 pos_x = car_x;
                 pos_y = car_y;
                 angle = deg2rad(car_yaw);
+                // Spline.h requires at least two points - need make one addition point for start-up case
+                double fake_x = car_x - cos(car_yaw);
+                double fake_y = car_y - sin(car_yaw);
+
+                tkptsx.push_back(fake_x);
                 tkptsx.push_back(pos_x);
+                tkptsy.push_back(fake_y);
                 tkptsy.push_back(pos_y);
             }
             else
@@ -322,9 +328,17 @@ int main() {
                 tkptsy.push_back(pos_y2);
             }
 
-            // Spline fit
-            tk::spline spline;
-            spline.set_points(tkptsx, tkptsy);
+            // Convert spline anchor points from global x,y coordinates into local one
+            //  originating from last waypoint of last batch (or ego position if no last waypoints).
+            for (int i=0; i< tkptsx.size(); i++)
+            {
+                double shifted_x = tkptsx[i]-pos_x;
+                double shifted_y = tkptsy[i]-pos_y;
+
+                tkptsx[i] = (shifted_x*cos(0-angle) - shifted_y*sin(0-angle));
+                tkptsy[i] = (shifted_x*sin(0-angle) + shifted_y*cos(0-angle));
+            }
+
 
             // Add more points for spline curve generation
             // Pick 30 meters and 60 meters down the road in Frenet as anchor points
@@ -337,6 +351,16 @@ int main() {
             tkptsy.push_back(nxt_wp0[1]);
             tkptsy.push_back(nxt_wp1[1]);
 
+            // Spline fit
+            for (int i=0; i<tkptsx.size(); i++)
+            {
+                std::cout << tkptsx[i];
+            }
+            std::cout << std::endl;
+
+            tk::spline spline;
+            spline.set_points(tkptsx, tkptsy);
+
             // Generate intermediate waypoints to target point s=30.
             double target_x = 30.0; // Move forward 30 meters
             double target_y = spline(target_x);
@@ -344,27 +368,38 @@ int main() {
 
             for(int i = 0; i < 50-path_size; i++)
             {
+                // Divide target length into equal segments based on reference speed
                 double N = target_dist/(0.02*ref_v/2.24);
-                double x_i = i*target_x/N; // <<<TO CONTINUE HERE>>>
+                double x_i = i*target_x/N;
+                double y_i = spline(x_i);
+
+                double tmp_x = x_i;
+                double tmp_y = y_i;
+                // Rotate and translate coordinates back into global x,y coordinates
+                x_i = tmp_x*cos(angle) - tmp_y*sin(angle) + pos_x;
+                y_i = tmp_x*sin(angle) + tmp_y*cos(angle) + pos_y;
+
+                next_x_vals.push_back(x_i);
+                next_y_vals.push_back(y_i);
             }
 
-            double dist_inc = 0.3;
-            vector<double> pos_xy(2);
-            vector<double> pos_sd(2);
-            for(int i = 0; i < 50-path_size; i++)
-            {
-                //next_x_vals.push_back(pos_x+(dist_inc)*cos(angle+(i+1)*(pi()/100)));
-                //next_y_vals.push_back(pos_y+(dist_inc)*sin(angle+(i+1)*(pi()/100)));
-                //pos_x += (dist_inc)*cos(angle+(i+1)*(pi()/100));
-                //pos_y += (dist_inc)*sin(angle+(i+1)*(pi()/100));
-                // Convert last waypoints from previous path in (x,y,theta) to (s,d)
-                pos_sd = getFrenet(pos_x, pos_y, angle, map_waypoints_x, map_waypoints_y);
-                pos_sd[1] = 6;
-                // Convert back of advancement in Frenet coordinates
-                pos_xy = getXY(pos_sd[0]+(dist_inc*(i+1)), pos_sd[1], map_waypoints_s, map_waypoints_x, map_waypoints_y);
-                next_x_vals.push_back(pos_xy[0]);
-                next_y_vals.push_back(pos_xy[1]);
-            }
+            //double dist_inc = 0.3;
+            //vector<double> pos_xy(2);
+            //vector<double> pos_sd(2);
+            //for(int i = 0; i < 50-path_size; i++)
+            //{
+            //    //next_x_vals.push_back(pos_x+(dist_inc)*cos(angle+(i+1)*(pi()/100)));
+            //    //next_y_vals.push_back(pos_y+(dist_inc)*sin(angle+(i+1)*(pi()/100)));
+            //    //pos_x += (dist_inc)*cos(angle+(i+1)*(pi()/100));
+            //    //pos_y += (dist_inc)*sin(angle+(i+1)*(pi()/100));
+            //    // Convert last waypoints from previous path in (x,y,theta) to (s,d)
+            //    pos_sd = getFrenet(pos_x, pos_y, angle, map_waypoints_x, map_waypoints_y);
+            //    pos_sd[1] = 6;
+            //    // Convert back of advancement in Frenet coordinates
+            //    pos_xy = getXY(pos_sd[0]+(dist_inc*(i+1)), pos_sd[1], map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            //    next_x_vals.push_back(pos_xy[0]);
+            //    next_y_vals.push_back(pos_xy[1]);
+            //}
 
             // END TODO
 
@@ -373,7 +408,7 @@ int main() {
 
           	auto msg = "42[\"control\","+ msgJson.dump()+"]";
 
-            //this_thread::sleep_for(chrono::milliseconds(500));
+            this_thread::sleep_for(chrono::milliseconds(100));
           	ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
           
         }

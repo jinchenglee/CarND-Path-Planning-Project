@@ -8,6 +8,7 @@
 #include "Eigen-3.3/Eigen/Core"
 #include "Eigen-3.3/Eigen/QR"
 #include "json.hpp"
+#include "spline.h"
 
 using namespace std;
 
@@ -241,60 +242,128 @@ int main() {
 
           	// TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
 
-            // Experiment 1: Stupidly going straight
-//            double dist_inc = 0.5;
-//            for(int i = 0; i < 50; i++)
-//            {
-//                  next_x_vals.push_back(car_x+(dist_inc*i)*cos(deg2rad(car_yaw)));
-//                  next_y_vals.push_back(car_y+(dist_inc*i)*sin(deg2rad(car_yaw)));
-//            }
+            // Experiment 4: Stay in current lane as if there's only ego car, and
+            //  use previous path waypoints to smooth trajectory.
 
-            // Experiment 2: Go in circle
-//            double pos_x;
-//            double pos_y;
-//            double angle;
-//            int path_size = previous_path_x.size();
-//            std::cout << "previous path size = " << path_size << std::endl;
-//
-//            for(int i = 0; i < path_size; i++)
-//            {
-//                next_x_vals.push_back(previous_path_x[i]);
-//                next_y_vals.push_back(previous_path_y[i]);
-//            }
-//
-//            if(path_size == 0)
-//            {
-//                pos_x = car_x;
-//                pos_y = car_y;
-//                angle = deg2rad(car_yaw);
-//            }
-//            else
-//            {
-//                pos_x = previous_path_x[path_size-1];
-//                pos_y = previous_path_y[path_size-1];
-//
-//                double pos_x2 = previous_path_x[path_size-2];
-//                double pos_y2 = previous_path_y[path_size-2];
-//                angle = atan2(pos_y-pos_y2,pos_x-pos_x2);
-//            }
-//
-//            double dist_inc = 0.5;
-//            for(int i = 0; i < 50-path_size; i++)
-//            {
-//                next_x_vals.push_back(pos_x+(dist_inc)*cos(angle+(i+1)*(pi()/100)));
-//                next_y_vals.push_back(pos_y+(dist_inc)*sin(angle+(i+1)*(pi()/100)));
-//                pos_x += (dist_inc)*cos(angle+(i+1)*(pi()/100));
-//                pos_y += (dist_inc)*sin(angle+(i+1)*(pi()/100));
-//            }
+            double pos_x;
+            double pos_y;
+            double angle;
+            int path_size = previous_path_x.size();
+            std::cout << "previous path size = " << path_size << std::endl;
 
-            // Experiment 3: Stay in current lane as if there's only ego car
-            vector<double> XY(2);
-            double dist_inc = 0.4;
-            for(int i = 0; i < 50; i++)
+            int lane = 1;
+            double ref_v = 49.0;
+
+            // compensate ego car for previous points
+            if (path_size > 0)
             {
-                  XY = getXY(car_s+(dist_inc*i), car_d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-                  next_x_vals.push_back(XY[0]);
-                  next_y_vals.push_back(XY[1]);
+                car_s = end_path_s;
+            }
+
+            // Sensor fustion processing
+            for(int i=0; i<sensor_fusion.size(); i++)
+            {
+                float d = sensor_fusion[i][6];
+
+                // Other vehicle in current ego lane
+                if (d<(2+4*lane+2) && d>(2+4*lane-1) )
+                {
+                    double vx = sensor_fusion[i][3];
+                    double vy = sensor_fusion[i][4];
+                    double car_in_lane_speed = sqrt(vx*vx+vy*vy);
+                    double car_in_lane_s = sensor_fusion[i][5];
+
+                    // Compensate for previous points on car_in_lane
+                    car_in_lane_s += ((double)path_size*0.02*car_in_lane_speed);
+
+                    // Check collision with the car_in_lane
+                    if ((car_in_lane_s>car_s) && ((car_in_lane_s-car_s)<30))
+                    {
+                        ref_v = 29.0;
+                    }
+                }
+            }
+
+            //
+            // Previous points left over processing
+            //
+            for(int i = 0; i < path_size; i++)
+            {
+                next_x_vals.push_back(previous_path_x[i]);
+                next_y_vals.push_back(previous_path_y[i]);
+            }
+
+            // prepare for spline points from previous points batch
+            vector<double> tkptsx;
+            vector<double> tkptsy;
+
+            if(path_size == 0)
+            {
+                // Current car pos serves as the left-over points
+                pos_x = car_x;
+                pos_y = car_y;
+                angle = deg2rad(car_yaw);
+                tkptsx.push_back(pos_x);
+                tkptsy.push_back(pos_y);
+            }
+            else
+            {
+                // Last two previous batch points
+                pos_x = previous_path_x[path_size-1];
+                pos_y = previous_path_y[path_size-1];
+
+                double pos_x2 = previous_path_x[path_size-2];
+                double pos_y2 = previous_path_y[path_size-2];
+                angle = atan2(pos_y-pos_y2,pos_x-pos_x2);
+
+                tkptsx.push_back(pos_x);
+                tkptsy.push_back(pos_y);
+                tkptsx.push_back(pos_x2);
+                tkptsy.push_back(pos_y2);
+            }
+
+            // Spline fit
+            tk::spline spline;
+            spline.set_points(tkptsx, tkptsy);
+
+            // Add more points for spline curve generation
+            // Pick 30 meters and 60 meters down the road in Frenet as anchor points
+            vector<double>  nxt_wp0 = getXY(car_s+30, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            vector<double>  nxt_wp1 = getXY(car_s+60, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+
+            tkptsx.push_back(nxt_wp0[0]);
+            tkptsx.push_back(nxt_wp1[0]);
+
+            tkptsy.push_back(nxt_wp0[1]);
+            tkptsy.push_back(nxt_wp1[1]);
+
+            // Generate intermediate waypoints to target point s=30.
+            double target_x = 30.0; // Move forward 30 meters
+            double target_y = spline(target_x);
+            double target_dist = sqrt(target_x*target_x+target_y*target_y);
+
+            for(int i = 0; i < 50-path_size; i++)
+            {
+                double N = target_dist/(0.02*ref_v/2.24);
+                double x_i = i*target_x/N; // <<<TO CONTINUE HERE>>>
+            }
+
+            double dist_inc = 0.3;
+            vector<double> pos_xy(2);
+            vector<double> pos_sd(2);
+            for(int i = 0; i < 50-path_size; i++)
+            {
+                //next_x_vals.push_back(pos_x+(dist_inc)*cos(angle+(i+1)*(pi()/100)));
+                //next_y_vals.push_back(pos_y+(dist_inc)*sin(angle+(i+1)*(pi()/100)));
+                //pos_x += (dist_inc)*cos(angle+(i+1)*(pi()/100));
+                //pos_y += (dist_inc)*sin(angle+(i+1)*(pi()/100));
+                // Convert last waypoints from previous path in (x,y,theta) to (s,d)
+                pos_sd = getFrenet(pos_x, pos_y, angle, map_waypoints_x, map_waypoints_y);
+                pos_sd[1] = 6;
+                // Convert back of advancement in Frenet coordinates
+                pos_xy = getXY(pos_sd[0]+(dist_inc*(i+1)), pos_sd[1], map_waypoints_s, map_waypoints_x, map_waypoints_y);
+                next_x_vals.push_back(pos_xy[0]);
+                next_y_vals.push_back(pos_xy[1]);
             }
 
             // END TODO

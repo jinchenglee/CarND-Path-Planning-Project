@@ -296,6 +296,7 @@ int main() {
             // prepare for spline points from previous points batch
             vector<double> tkptsx;
             vector<double> tkptsy;
+            double pos_x2, pos_y2;
 
             if(path_size < 2)
             {
@@ -304,13 +305,11 @@ int main() {
                 pos_y = car_y;
                 angle = deg2rad(car_yaw);
                 // Spline.h requires at least two points - need make one addition point for start-up case
-                double fake_x = car_x - cos(car_yaw);
-                double fake_y = car_y - sin(car_yaw);
-
-                tkptsx.push_back(fake_x);
-                tkptsx.push_back(pos_x);
-                tkptsy.push_back(fake_y);
-                tkptsy.push_back(pos_y);
+                // Corner case: angle = 0
+                if(angle==0.0)
+                    angle = 0.1;
+                pos_x2 = car_x - cos(angle);
+                pos_y2 = car_y - sin(angle);
             }
             else
             {
@@ -318,18 +317,45 @@ int main() {
                 pos_x = previous_path_x[path_size-1];
                 pos_y = previous_path_y[path_size-1];
 
-                double pos_x2 = previous_path_x[path_size-2];
-                double pos_y2 = previous_path_y[path_size-2];
+                pos_x2 = previous_path_x[path_size-2];
+                pos_y2 = previous_path_y[path_size-2];
                 angle = atan2(pos_y-pos_y2,pos_x-pos_x2);
-
-                tkptsx.push_back(pos_x);
-                tkptsy.push_back(pos_y);
-                tkptsx.push_back(pos_x2);
-                tkptsy.push_back(pos_y2);
+                // Corner case: angle = 0
+                if(angle==0.0)
+                    angle = 0.1;
             }
+            std::cout << "angle = " << angle << std::endl;
+
+            // push sequence matters. spline.h expects ascending order
+            tkptsx.push_back(pos_x2);
+            tkptsx.push_back(pos_x);
+            tkptsy.push_back(pos_y2);
+            tkptsy.push_back(pos_y);
+
+            // Add more points for spline curve generation
+            // Pick 30 meters and 60 meters down the road in Frenet as anchor points
+            vector<double>  nxt_wp0 = getXY(car_s+30, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            vector<double>  nxt_wp1 = getXY(car_s+60, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            vector<double>  nxt_wp2 = getXY(car_s+90, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+
+            tkptsx.push_back(nxt_wp0[0]);
+            tkptsx.push_back(nxt_wp1[0]);
+            tkptsx.push_back(nxt_wp2[0]);
+
+            tkptsy.push_back(nxt_wp0[1]);
+            tkptsy.push_back(nxt_wp1[1]);
+            tkptsy.push_back(nxt_wp2[1]);
 
             // Convert spline anchor points from global x,y coordinates into local one
             //  originating from last waypoint of last batch (or ego position if no last waypoints).
+            // Spline fit
+            std::cout << "tkptsx = ";
+            for (int i=0; i<tkptsx.size(); i++)
+            {
+                std::cout << tkptsx[i] << " ";
+            }
+            std::cout << std::endl;
+
             for (int i=0; i< tkptsx.size(); i++)
             {
                 double shifted_x = tkptsx[i]-pos_x;
@@ -340,21 +366,11 @@ int main() {
             }
 
 
-            // Add more points for spline curve generation
-            // Pick 30 meters and 60 meters down the road in Frenet as anchor points
-            vector<double>  nxt_wp0 = getXY(car_s+30, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
-            vector<double>  nxt_wp1 = getXY(car_s+60, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
-
-            tkptsx.push_back(nxt_wp0[0]);
-            tkptsx.push_back(nxt_wp1[0]);
-
-            tkptsy.push_back(nxt_wp0[1]);
-            tkptsy.push_back(nxt_wp1[1]);
-
             // Spline fit
+            std::cout << "(transformed) tkptsx = ";
             for (int i=0; i<tkptsx.size(); i++)
             {
-                std::cout << tkptsx[i];
+                std::cout << tkptsx[i] << " ";
             }
             std::cout << std::endl;
 
@@ -378,6 +394,9 @@ int main() {
                 // Rotate and translate coordinates back into global x,y coordinates
                 x_i = tmp_x*cos(angle) - tmp_y*sin(angle) + pos_x;
                 y_i = tmp_x*sin(angle) + tmp_y*cos(angle) + pos_y;
+
+                vector<double>  tmp = getFrenet(x_i, y_i, angle, map_waypoints_x, map_waypoints_y);
+                std::cout << "converted s: " << tmp[0] << ", converted d: " << tmp[1] << std::endl;
 
                 next_x_vals.push_back(x_i);
                 next_y_vals.push_back(y_i);
@@ -408,7 +427,7 @@ int main() {
 
           	auto msg = "42[\"control\","+ msgJson.dump()+"]";
 
-            this_thread::sleep_for(chrono::milliseconds(100));
+            //this_thread::sleep_for(chrono::milliseconds(100));
           	ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
           
         }

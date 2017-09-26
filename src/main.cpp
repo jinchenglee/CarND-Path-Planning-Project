@@ -304,12 +304,9 @@ int main() {
                 pos_x = car_x;
                 pos_y = car_y;
                 angle = deg2rad(car_yaw);
-                // Spline.h requires at least two points - need make one addition point for start-up case
-                // Corner case: angle = 0
-                if(angle==0.0)
-                    angle = 0.1;
-                pos_x2 = car_x - cos(angle);
-                pos_y2 = car_y - sin(angle);
+
+                tkptsx.push_back(pos_x);
+                tkptsy.push_back(pos_y);
             }
             else
             {
@@ -320,17 +317,18 @@ int main() {
                 pos_x2 = previous_path_x[path_size-2];
                 pos_y2 = previous_path_y[path_size-2];
                 angle = atan2(pos_y-pos_y2,pos_x-pos_x2);
-                // Corner case: angle = 0
-                if(angle==0.0)
-                    angle = 0.1;
+
+                // push sequence matters. spline.h expects ascending order
+                tkptsx.push_back(pos_x2);
+                tkptsy.push_back(pos_y2);
+                // Cornercase, add only one point
+                if (angle!=0.0)
+                {
+                    tkptsx.push_back(pos_x);
+                    tkptsy.push_back(pos_y);
+                }
             }
             std::cout << "angle = " << angle << std::endl;
-
-            // push sequence matters. spline.h expects ascending order
-            tkptsx.push_back(pos_x2);
-            tkptsx.push_back(pos_x);
-            tkptsy.push_back(pos_y2);
-            tkptsy.push_back(pos_y);
 
             // Add more points for spline curve generation
             // Pick 30 meters and 60 meters down the road in Frenet as anchor points
@@ -427,7 +425,7 @@ int main() {
 
           	auto msg = "42[\"control\","+ msgJson.dump()+"]";
 
-            //this_thread::sleep_for(chrono::milliseconds(100));
+            this_thread::sleep_for(chrono::milliseconds(300));
           	ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
           
         }

@@ -197,7 +197,10 @@ int main() {
   	map_waypoints_dy.push_back(d_y);
   }
 
-  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
+  int lane = 1;
+  double ref_v = 0.0;
+
+  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy, &lane, &ref_v](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
@@ -245,14 +248,13 @@ int main() {
             // Experiment 4: Stay in current lane as if there's only ego car, and
             //  use previous path waypoints to smooth trajectory.
 
+            bool too_close = false;
+
             double pos_x;
             double pos_y;
             double angle;
             int path_size = previous_path_x.size();
             std::cout << "previous path size = " << path_size << std::endl;
-
-            int lane = 1;
-            double ref_v = 49.0;
 
             // compensate ego car for previous points
             if (path_size > 0)
@@ -279,10 +281,16 @@ int main() {
                     // Check collision with the car_in_lane
                     if ((car_in_lane_s>car_s) && ((car_in_lane_s-car_s)<30))
                     {
-                        ref_v = 29.0;
+                        too_close = true;
                     }
                 }
             }
+
+            // Speed adjustment
+            if (too_close)
+                ref_v -= 0.224;
+            else if (ref_v < 49.0)
+                ref_v += 0.224;
 
             //
             // Previous points left over processing
@@ -328,7 +336,7 @@ int main() {
                     tkptsy.push_back(pos_y);
                 }
             }
-            std::cout << "angle = " << angle << std::endl;
+//            std::cout << "angle = " << angle << std::endl;
 
             // Add more points for spline curve generation
             // Pick 30 meters and 60 meters down the road in Frenet as anchor points
@@ -347,12 +355,12 @@ int main() {
             // Convert spline anchor points from global x,y coordinates into local one
             //  originating from last waypoint of last batch (or ego position if no last waypoints).
             // Spline fit
-            std::cout << "tkptsx = ";
-            for (int i=0; i<tkptsx.size(); i++)
-            {
-                std::cout << tkptsx[i] << " ";
-            }
-            std::cout << std::endl;
+//            std::cout << "tkptsx = ";
+//            for (int i=0; i<tkptsx.size(); i++)
+//            {
+//                std::cout << tkptsx[i] << " ";
+//            }
+//            std::cout << std::endl;
 
             for (int i=0; i< tkptsx.size(); i++)
             {
@@ -363,14 +371,13 @@ int main() {
                 tkptsy[i] = (shifted_x*sin(0-angle) + shifted_y*cos(0-angle));
             }
 
-
             // Spline fit
-            std::cout << "(transformed) tkptsx = ";
-            for (int i=0; i<tkptsx.size(); i++)
-            {
-                std::cout << tkptsx[i] << " ";
-            }
-            std::cout << std::endl;
+//            std::cout << "(transformed) tkptsx = ";
+//            for (int i=0; i<tkptsx.size(); i++)
+//            {
+//                std::cout << tkptsx[i] << " ";
+//            }
+//            std::cout << std::endl;
 
             tk::spline spline;
             spline.set_points(tkptsx, tkptsy);
@@ -394,7 +401,7 @@ int main() {
                 y_i = tmp_x*sin(angle) + tmp_y*cos(angle) + pos_y;
 
                 vector<double>  tmp = getFrenet(x_i, y_i, angle, map_waypoints_x, map_waypoints_y);
-                std::cout << "converted s: " << tmp[0] << ", converted d: " << tmp[1] << std::endl;
+                //std::cout << "converted s: " << tmp[0] << ", converted d: " << tmp[1] << std::endl;
 
                 next_x_vals.push_back(x_i);
                 next_y_vals.push_back(y_i);
@@ -425,7 +432,7 @@ int main() {
 
           	auto msg = "42[\"control\","+ msgJson.dump()+"]";
 
-            this_thread::sleep_for(chrono::milliseconds(300));
+            //this_thread::sleep_for(chrono::milliseconds(100));
           	ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
           
         }

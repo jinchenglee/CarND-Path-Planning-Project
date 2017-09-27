@@ -197,10 +197,12 @@ int main() {
   	map_waypoints_dy.push_back(d_y);
   }
 
-  int lane = 1;
-  double ref_v = 0.0;
+  int lane = 1; // Ego lane.
+  int target_lane = 1; // Lane change target lane.
+  double ref_v = 0.0; // Reference speed.
+  bool startup_done = false; // Flag for initial start up.
 
-  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy, &lane, &ref_v](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
+  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy, &lane, &target_lane, &ref_v, &startup_done](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
@@ -245,16 +247,13 @@ int main() {
 
           	// TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
 
-            // Experiment 4: Stay in current lane as if there's only ego car, and
-            //  use previous path waypoints to smooth trajectory.
-
             bool too_close = false;
 
             double pos_x;
             double pos_y;
             double angle;
             int path_size = previous_path_x.size();
-            std::cout << "previous path size = " << path_size << std::endl;
+            //std::cout << "previous path size = " << path_size << std::endl;
 
             // compensate ego car for previous points
             if (path_size > 0)
@@ -262,35 +261,99 @@ int main() {
                 car_s = end_path_s;
             }
 
-            // Sensor fustion processing
-            for(int i=0; i<sensor_fusion.size(); i++)
+            // closest cars in different lanes - initialized with large number to be overwritten.
+            double left_fwd_closest = 5000;
+            double left_bwd_closest = 5000;
+            double right_fwd_closest = 5000;
+            double right_bwd_closest = 5000;
+            // Do not consider lane change at loop start/end
+            if (car_s>50 && car_s<6900)
             {
-                float d = sensor_fusion[i][6];
-
-                // Other vehicle in current ego lane
-                if (d<(2+4*lane+2) && d>(2+4*lane-1) )
+                // Sensor fustion processing
+                for(int i=0; i<sensor_fusion.size(); i++)
                 {
+                    float d = sensor_fusion[i][6];
+
                     double vx = sensor_fusion[i][3];
                     double vy = sensor_fusion[i][4];
-                    double car_in_lane_speed = sqrt(vx*vx+vy*vy);
-                    double car_in_lane_s = sensor_fusion[i][5];
-
+                    double other_car_speed = sqrt(vx*vx+vy*vy);
+                    double other_car_s = sensor_fusion[i][5];
                     // Compensate for previous points on car_in_lane
-                    car_in_lane_s += ((double)path_size*0.02*car_in_lane_speed);
+                    other_car_s += ((double)path_size*0.02*other_car_speed);
 
-                    // Check collision with the car_in_lane
-                    if ((car_in_lane_s>car_s) && ((car_in_lane_s-car_s)<30))
+                    // left to ego lane
+                    if (lane>0)
                     {
-                        too_close = true;
+                        if (d<(2+4*(lane-1)+2) && d>(2+4*(lane-1)-2))
+                        {
+                            if (other_car_s>car_s && (other_car_s-car_s)<left_fwd_closest)
+                                left_fwd_closest = other_car_s-car_s;
+                            else if (other_car_s<car_s && (car_s-other_car_s)<left_bwd_closest)
+                                left_bwd_closest = car_s-other_car_s;
+                        }
+                    }
+
+                    // right to ego lane
+                    if (lane<2)
+                    {
+                        if (d<(2+4*(lane+1)+2) && d>(2+4*(lane+1)-2))
+                        {
+                            if (other_car_s>car_s && (other_car_s-car_s)<right_fwd_closest)
+                                right_fwd_closest = other_car_s-car_s;
+                            else if (other_car_s<car_s && (car_s-other_car_s)<right_bwd_closest)
+                                right_bwd_closest = car_s-other_car_s;
+                        }
+                    }
+
+                    // Other vehicle in current ego lane
+                    if (d<(2+4*lane+2) && d>(2+4*lane-2) )
+                    {
+                        // Check collision with the car_in_lane
+                        if ((other_car_s>car_s) && ((other_car_s-car_s)<30))
+                        {
+                            too_close = true;
+                        }
                     }
                 }
             }
 
-            // Speed adjustment
+            // Speed adjustment - 0.4 delta translates to ~3m/s^2 acceleration in simulator
             if (too_close)
-                ref_v -= 0.4;
+                ref_v -= 0.3;
             else if (ref_v < 48.0)
-                ref_v += 0.4;
+                ref_v += 0.3;
+
+            // Initial start up flag
+            if (car_speed > 25.0 && ~startup_done && too_close)
+            {
+                startup_done = true;
+                //std::cout << "Start up process done!" << std::endl;
+            }
+
+            // Speed lower than threshold and safe to change lane, then change
+            if (car_speed<45.0 && startup_done)
+            {
+                // Only change lane when previous lane change completed.
+                // Please be noticed that condition is a bit stricter (only if car sits around lane center).
+                bool lane_change_completed = car_d<(2+4*target_lane+1) && car_d>(2+4*target_lane-1);
+                //std::cout << "Lane change completed. Current lane: " << target_lane << std::endl;
+
+                if (lane_change_completed)
+                {
+                    if (lane>0 && left_fwd_closest>30 && left_bwd_closest>15) // left lane avail
+                    {
+                        lane -= 1;
+                        target_lane = lane;
+                        std::cout << "Trigger left lane change to LANE " << target_lane << std::endl;
+                    }
+                    else if (lane<2 && right_fwd_closest>30 && right_bwd_closest>15) // right lane avail
+                    {
+                        lane += 1;
+                        target_lane = lane;
+                        std::cout << "Trigger right lane change to LANE " << target_lane << std::endl;
+                    }
+                }
+            }
 
             //
             // Previous points left over processing
@@ -406,24 +469,6 @@ int main() {
                 next_x_vals.push_back(x_i);
                 next_y_vals.push_back(y_i);
             }
-
-            //double dist_inc = 0.3;
-            //vector<double> pos_xy(2);
-            //vector<double> pos_sd(2);
-            //for(int i = 0; i < 50-path_size; i++)
-            //{
-            //    //next_x_vals.push_back(pos_x+(dist_inc)*cos(angle+(i+1)*(pi()/100)));
-            //    //next_y_vals.push_back(pos_y+(dist_inc)*sin(angle+(i+1)*(pi()/100)));
-            //    //pos_x += (dist_inc)*cos(angle+(i+1)*(pi()/100));
-            //    //pos_y += (dist_inc)*sin(angle+(i+1)*(pi()/100));
-            //    // Convert last waypoints from previous path in (x,y,theta) to (s,d)
-            //    pos_sd = getFrenet(pos_x, pos_y, angle, map_waypoints_x, map_waypoints_y);
-            //    pos_sd[1] = 6;
-            //    // Convert back of advancement in Frenet coordinates
-            //    pos_xy = getXY(pos_sd[0]+(dist_inc*(i+1)), pos_sd[1], map_waypoints_s, map_waypoints_x, map_waypoints_y);
-            //    next_x_vals.push_back(pos_xy[0]);
-            //    next_y_vals.push_back(pos_xy[1]);
-            //}
 
             // END TODO
 

@@ -288,9 +288,9 @@ int main() {
 
             // Speed adjustment
             if (too_close)
-                ref_v -= 0.224;
-            else if (ref_v < 49.0)
-                ref_v += 0.224;
+                ref_v -= 0.4;
+            else if (ref_v < 48.0)
+                ref_v += 0.4;
 
             //
             // Previous points left over processing
@@ -387,10 +387,10 @@ int main() {
             double target_y = spline(target_x);
             double target_dist = sqrt(target_x*target_x+target_y*target_y);
 
-            for(int i = 0; i < 50-path_size; i++)
+            for(int i = 1; i < 50-path_size; i++)
             {
                 // Divide target length into equal segments based on reference speed
-                double N = target_dist/(0.02*ref_v/2.24);
+                double N = target_dist/(0.02*ref_v/2.2);
                 double x_i = i*target_x/N;
                 double y_i = spline(x_i);
 
@@ -432,7 +432,7 @@ int main() {
 
           	auto msg = "42[\"control\","+ msgJson.dump()+"]";
 
-            //this_thread::sleep_for(chrono::milliseconds(100));
+            //this_thread::sleep_for(chrono::milliseconds(200));
           	ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
           
         }

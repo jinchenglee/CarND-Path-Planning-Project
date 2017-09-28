@@ -11,6 +11,8 @@
 #include "spline.h"
 
 using namespace std;
+using Eigen::MatrixXd;
+using Eigen::VectorXd;
 
 // for convenience
 using json = nlohmann::json;
@@ -157,6 +159,50 @@ vector<double> getXY(double s, double d, const vector<double> &maps_s, const vec
 	double y = seg_y + d*sin(perp_heading);
 
 	return {x,y};
+
+}
+
+vector<double> JMT(vector< double> start, vector <double> end, double T)
+{
+    /*
+    Calculate the Jerk Minimizing Trajectory that connects the initial state
+    to the final state in time T.
+
+    Derivation: https://classroom.udacity.com/nanodegrees/nd013/parts/6047fe34-d93c-4f50-8336-b70ef10cb4b2/modules/27800789-bc8e-4adc-afe0-ec781e82ceae/lessons/db4b83a1-b304-4355-92c7-66e973102079/concepts/35ae38e8-3f68-4edf-9ea7-5b324d014d72
+        or, here: http://www.shadmehrlab.org/book/minimum_jerk/minimumjerk.htm
+
+    INPUTS
+
+    start - the vehicles start location given as a length three array
+        corresponding to initial values of [s, s_dot, s_double_dot]
+
+    end   - the desired end state for vehicle. Like "start" this is a
+        length three array.
+
+    T     - The duration, in seconds, over which this maneuver should occur.
+
+    OUTPUT
+    an array of length 6, each value corresponding to a coefficent in the polynomial
+    s(t) = a_0 + a_1 * t + a_2 * t**2 + a_3 * t**3 + a_4 * t**4 + a_5 * t**5
+
+    EXAMPLE
+
+    > JMT( [0, 10, 0], [10, 10, 0], 1)
+    [0.0, 10.0, 0.0, 0.0, 0.0, 0.0]
+    */
+    MatrixXd A = MatrixXd(3,3);
+    VectorXd b = MatrixXd(3,1);
+
+    double T2 = T*T;
+    double T3 = T*T2;
+    double T4 = T*T3;
+    double T5 = T*T4;
+    A << T3, T4, T5,  3*T2, 4*T3, 5*T4,  6*T, 12*T2, 20*T3;
+    b << end[0]-(start[0]+T*start[1]+0.5*T2*start[2]), end[1]-(start[1]+T*start[2]),
+        end[2]-start[2];
+    VectorXd x = MatrixXd(3,1);
+    x = A.colPivHouseholderQr().solve(b);
+    return {start[0],start[1],0.5*start[2],x[0],x[1],x[2]};
 
 }
 
@@ -319,7 +365,7 @@ int main() {
 
             // Speed adjustment - 0.4 delta translates to ~3m/s^2 acceleration in simulator
             if (too_close)
-                ref_v -= 0.3;
+                ref_v -= 0.4; // Slow down faster
             else if (ref_v < 48.0)
                 ref_v += 0.3;
 
@@ -376,9 +422,16 @@ int main() {
                 pos_y = car_y;
                 angle = deg2rad(car_yaw);
 
+                // Cornercase, add only one point
+                if (angle!=0.0)
+                {
+                    tkptsx.push_back(pos_x-sin(angle));
+                    tkptsy.push_back(pos_y-cos(angle));
+                }
+
                 tkptsx.push_back(pos_x);
                 tkptsy.push_back(pos_y);
-            }
+             }
             else
             {
                 // Last two previous batch points
@@ -403,9 +456,12 @@ int main() {
 
             // Add more points for spline curve generation
             // Pick 30 meters and 60 meters down the road in Frenet as anchor points
-            vector<double>  nxt_wp0 = getXY(car_s+30, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
-            vector<double>  nxt_wp1 = getXY(car_s+60, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
-            vector<double>  nxt_wp2 = getXY(car_s+90, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            vector<double>  nxt_wp0;
+            vector<double>  nxt_wp1;
+            vector<double>  nxt_wp2;
+            nxt_wp0 = getXY(car_s+30, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            nxt_wp1 = getXY(car_s+60, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            nxt_wp2 = getXY(car_s+90, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
 
             tkptsx.push_back(nxt_wp0[0]);
             tkptsx.push_back(nxt_wp1[0]);

@@ -294,6 +294,7 @@ int main() {
           	// TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
 
             bool too_close = false;
+            double close_dist = 30.0;
 
             double pos_x;
             double pos_y;
@@ -358,6 +359,7 @@ int main() {
                         if ((other_car_s>car_s) && ((other_car_s-car_s)<30))
                         {
                             too_close = true;
+                            close_dist = other_car_s-car_s;
                         }
                     }
                 }
@@ -365,8 +367,8 @@ int main() {
 
             // Speed adjustment - 0.4 delta translates to ~3m/s^2 acceleration in simulator
             if (too_close)
-                ref_v -= 0.4; // Slow down faster
-            else if (ref_v < 48.0)
+                ref_v -= 10.0/close_dist; // Slow down faster
+            else if (ref_v < 48.5)
                 ref_v += 0.3;
 
             // Initial start up flag
@@ -377,7 +379,7 @@ int main() {
             }
 
             // Speed lower than threshold and safe to change lane, then change
-            if (car_speed<45.0 && startup_done)
+            if (car_speed<42.0 && close_dist<30.0 && startup_done)
             {
                 // Only change lane when previous lane change completed.
                 // Please be noticed that condition is a bit stricter (only if car sits around lane center).
@@ -414,6 +416,7 @@ int main() {
             vector<double> tkptsx;
             vector<double> tkptsy;
             double pos_x2, pos_y2;
+            double pos_x3, pos_y3;
 
             if(path_size < 2)
             {
@@ -423,7 +426,7 @@ int main() {
                 angle = deg2rad(car_yaw);
 
                 // Cornercase, add only one point
-                if (angle!=0.0)
+                if (angle!=0.0) // Smoother startup
                 {
                     tkptsx.push_back(pos_x-sin(angle));
                     tkptsy.push_back(pos_y-cos(angle));
@@ -431,7 +434,8 @@ int main() {
 
                 tkptsx.push_back(pos_x);
                 tkptsy.push_back(pos_y);
-             }
+
+            }
             else
             {
                 // Last two previous batch points
@@ -442,7 +446,14 @@ int main() {
                 pos_y2 = previous_path_y[path_size-2];
                 angle = atan2(pos_y-pos_y2,pos_x-pos_x2);
 
-                // push sequence matters. spline.h expects ascending order
+                if (path_size>=3) {
+                    pos_x3 = previous_path_x[path_size-3];
+                    pos_y3 = previous_path_y[path_size-3];
+
+                    // push sequence matters. spline.h expects ascending order
+                    tkptsx.push_back(pos_x3);
+                    tkptsy.push_back(pos_y3);
+                }
                 tkptsx.push_back(pos_x2);
                 tkptsy.push_back(pos_y2);
                 // Cornercase, add only one point
@@ -460,7 +471,7 @@ int main() {
             vector<double>  nxt_wp1;
             vector<double>  nxt_wp2;
             nxt_wp0 = getXY(car_s+30, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
-            nxt_wp1 = getXY(car_s+60, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            nxt_wp1 = getXY(car_s+50, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
             nxt_wp2 = getXY(car_s+90, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
 
             tkptsx.push_back(nxt_wp0[0]);
@@ -509,7 +520,7 @@ int main() {
             for(int i = 1; i < 50-path_size; i++)
             {
                 // Divide target length into equal segments based on reference speed
-                double N = target_dist/(0.02*ref_v/2.2);
+                double N = target_dist/(0.02*max(2.0,ref_v)/2.25);
                 double x_i = i*target_x/N;
                 double y_i = spline(x_i);
 

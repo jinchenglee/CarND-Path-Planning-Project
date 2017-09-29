@@ -367,8 +367,10 @@ int main() {
 
             // Speed adjustment - 0.4 delta translates to ~3m/s^2 acceleration in simulator
             if (too_close)
-                ref_v -= 10.0/close_dist; // Slow down faster
-            else if (ref_v < 48.5)
+                ref_v -= min(0.8, 10.0/close_dist); // Slow down faster
+		if (ref_v<0.0)
+		    ref_v = 0.0;
+            else if (ref_v < 49.5)
                 ref_v += 0.3;
 
             // Initial start up flag
@@ -379,7 +381,7 @@ int main() {
             }
 
             // Speed lower than threshold and safe to change lane, then change
-            if (car_speed<42.0 && close_dist<30.0 && startup_done)
+            if (car_speed<45.0 && close_dist<30.0 && startup_done)
             {
                 // Only change lane when previous lane change completed.
                 // Please be noticed that condition is a bit stricter (only if car sits around lane center).

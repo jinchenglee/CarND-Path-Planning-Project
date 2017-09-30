@@ -1,22 +1,129 @@
 # CarND-Path-Planning-Project
 Self-Driving Car Engineer Nanodegree Program
    
-### Simulator.
-You can download the Term3 Simulator which contains the Path Planning Project from the [releases tab (https://github.com/udacity/self-driving-car-sim/releases).
-
 ### Goals
-In this project your goal is to safely navigate around a virtual highway with other traffic that is driving +-10 MPH of the 50 MPH speed limit. You will be provided the car's localization and sensor fusion data, there is also a sparse map list of waypoints around the highway. The car should try to go as close as possible to the 50 MPH speed limit, which means passing slower traffic when possible, note that other cars will try to change lanes too. The car should avoid hitting other cars at all cost as well as driving inside of the marked road lanes at all times, unless going from one lane to another. The car should be able to make one complete loop around the 6946m highway. Since the car is trying to go 50 MPH, it should take a little over 5 minutes to complete 1 loop. Also the car should not experience total acceleration over 10 m/s^2 and jerk that is greater than 50 m/s^3.
+In this project the goal is to safely navigate around a virtual highway with other traffic that is driving +-10 MPH of the 50 MPH speed limit. Ego car's localization and sensor fusion data will be provided, there is also a sparse map list of waypoints around the highway. The car should try to go as close as possible to the 50 MPH speed limit, which means passing slower traffic when possible, note that other cars will try to change lanes too. The car should avoid hitting other cars at all cost as well as driving inside of the marked road lanes at all times, unless going from one lane to another. The car should be able to make one complete loop around the 6946m highway. Since the car is trying to go 50 MPH, it should take a little over 5 minutes to complete 1 loop. Also the car should not experience total acceleration over 10 m/s^2 and jerk that is greater than 50 m/s^3.
 
-### Path planning project phasing plan:
-1. Write code as if there's only one lane and ego car is the only car. Plan ahead to stay within this lane (only s is involved), ignore jerk etc. violations. There'll for sure be accidents to run into car ahead in the same lane.
-2. Stay within ego lane, avoid hit car in front within same lane. Control delta(s) steps.
-3. Stay within ego lane, follow previous car and control jerks etc. to avoid violation of speed/jerk etc. constraints. 
-4. (Start considering lane changes)...
+### Path planning project implementation phases:
+Below steps are followed to incrementally finish the project.
+1. Write code as if there's only one lane and ego car is the only car. Plan ahead to stay within this lane (only s is involved), ignore jerk etc. violations. There'll for sure be accidents to run into car ahead in the same lane. 
+2. Stay within ego lane, avoid hit car in front within same lane. Control delta(s) steps by control reference speed.
+3. Stay within ego lane, follow previous car and control jerks etc. to avoid violation of speed/jerk etc. constraints. Mainly use spline.h to fitting curve, taking advantage of waypoints from previously generated trajectory.
+4. Process fusion data of other cars, planning simple lane change (left/fast lane takes priority vs. right lane).
+5. Final touch on misc: more sophiscated lane change planning (details below), safety considerations (ego speed vs. empty lane buffer of target lane when changing lane) etc. 
 
+### Implementation details
+
+#### Spline fitting trajectory
+
+Use simple spline.h fitting to generate trajectory, experiments to set certain parameters achieved jerk-free implementations. 
+
+Every round of calculation (20ms gap) generates 50 NEW waypoints. Depending on how many waypoints from previous round are left, only (50-remaining old waypoints) NEW waypoints will be posted to simulator though.
+
+To minimizing jerk, for simplicity implementation no JMT is used here, last 3 waypoints (if avail) from previous paths are used, then adding three more "long shot" points ahead in s (s+30, s+60, s+90), a total of 6 points are used as anchor points for spline fitting. Using of waypoints from previous path guarantees smooth transition at boundary as the latency between program and simulator is inherent. BTW, I tried to only use last 2 waypoints from previous path, jerks will occasionally witnessed in verification runs. Using last 3 waypoints resolved that.
+
+Another heuristic method involved to minimize jerk is to evenly divide the Euclidean distance between 50 new points as below diagram shows (curtersy to Udacity Q&A video session on this project). It is not accurate math method to track jerk, but it works and simple enough.
+
+![simpleEvenDistance](./simpleEvenDistance.png  "Planning even distance of waypoints")
+
+#### Lane change control
+
+Specifically, closest distance of car in front of ego lane is monitored:
+```
+                // Other vehicle in current ego lane
+                if (d<(2+4*lane+2) && d>(2+4*lane-2) )
+                {
+                    // Check collision with the car_in_lane
+                    if ((other_car_s>car_s) && ((other_car_s-car_s)<30))
+                    {
+                        too_close = true;
+                        close_dist = other_car_s-car_s;
+                    }
+                }
+```
+##### When to consider lane change?
+Only all below are met:
+1. Initial start up is done. Startup process doesn't consider lane change, just follow lane until mph > certain threshold.
+2. Current speed is slower than 45mph and close enough to car in front - it must be held back by some slow car ahead in lane keep state.
+3. Not too close to car in front. This is to avoid collision in case car in front is suddenly slowing down.
+4. Ego speed is not slower than 35 mph. Save reason as 3, to avoid collision by other fast cars from behind when in lane change.
+5. Not considering lane change again when in a lane change process. 
+```
+            if (car_speed<45.0 && && car_speed>35 
+                 && close_dist<30.0 && close_dist>10.0 
+                 && startup_done )
+                
+                // Only change lane when previous lane change completed.
+                // Please be noticed that condition is a bit stricter (only if car sits around lane center).
+                bool lane_change_completed = car_d<(2+4*target_lane+1) && car_d>(2+4*target_lane-1);
+
+            ...
+```
+
+##### Left/right lane change preference
+In fusion data processing step, these variables are recorded.
+```
+            // closest cars in different lanes - initialized with large number to be overwritten.
+            double left_fwd_closest = 5000;
+            double left_bwd_closest = 5000;
+            double right_fwd_closest = 5000;
+            double right_bwd_closest = 5000;
+```
+Simultaneously considering both sides when margins ahead/behind are above thresholds (30 meters ahead, 20 meters behind). Threshold numbers are from experiments and heuristics.
+```
+                    bool turn_left=false;
+                    bool turn_right=false;
+
+                    if (lane>0 && left_fwd_closest>30 && left_bwd_closest>20) // left lane avail
+                        turn_left = true;
+                    if (lane<2 && right_fwd_closest>30 && right_bwd_closest>20) // right lane avail
+                        turn_right = true;
+```
+When both sides are avail, which ever gives bigger margin ahead wins. 
+
+#### Speed control
+Below code controls reference speed:
+```
+            // Speed adjustment - 0.4 delta translates to ~3m/s^2 acceleration in simulator
+            
+            // Slow down faster when closer
+            if (too_close)
+                ref_v -= min(0.8, 10.0/close_dist); 
+            // Speed up to get close to speed limit
+            else if (ref_v < 49.5) 
+                ref_v += 0.5;
+                
+            // Slowing down until stop in emergency, 
+            // even at cost of system overloading incident. 
+            // E.g. sudden braking of car ahead 
+            if (close_dist < 5.0) 
+                ref_v -= 1.0;
+                
+            // Under-flow protection
+            if (ref_v<0.0)  
+                ref_v = 0.0;
+```
+##### Crazily abrupt braking
+I did recorded crazy braking of car ahead of me. My code to deal with sudden brake works (45s), however, at the cost of overloading system incident.
+
+<iframe width="560" height="315" src="https://www.youtube.com/embed/xZyyLK_BOTs" frameborder="0" allowfullscreen></iframe>
+
+
+### Reflections and Improvement opportunities
+1. Use JMT (jerk minimum trajectory) to generate trajectory. I've implemented this function in main.cpp, however, it requires tracking of s', s'' and d', d'' -- a lot of efforts. Since simple spline fitting works, this idea was abandoned for schedule reason.
+2. Need reimplement GetXY() and getFrenet() functions that seem not provide high accuracy output -- a certain segments of curve lane on the map is of special suspect of low precision, whenever car passes there, high chance of running close to lane edges and swizzling spline curve witnessed too.
+3. FSM for more sophisticated control on behavior. The idea gave in for schedule reason too as current scheme works fine for ~30 mins w/o incidents. Corner cases such as the sudden brake shown above need more sophisticated controls (FSM).
+4. Cost function to take into account time spent/speed. 
+
+---------------------------------------------------------------
+(below are original useful info. to start the project)
 ### The map of the highway is in data/highway_map.txt
 Each waypoint in the list contains  [x,y,s,dx,dy] values. x and y are the waypoint's map coordinate position, the s value is the distance along the road to get to that waypoint in meters, the dx and dy values define the unit normal vector pointing outward of the highway loop.
 
 The highway's waypoints loop around so the frenet s value, distance along the road, goes from 0 to 6945.554.
+
+### Simulator.
+You can download the Term3 Simulator which contains the Path Planning Project from the [releases tab (https://github.com/udacity/self-driving-car-sim/releases).
 
 ## Basic Build Instructions
 

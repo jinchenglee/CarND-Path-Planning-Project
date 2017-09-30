@@ -20,7 +20,9 @@ Use simple spline.h fitting to generate trajectory, experiments to set certain p
 
 Every round of calculation (20ms gap) generates 50 NEW waypoints. Depending on how many waypoints from previous round are left, only (50-remaining old waypoints) NEW waypoints will be posted to simulator though.
 
-To minimizing jerk, for simplicity implementation no JMT is used here, last 3 waypoints (if avail) from previous paths are used, then adding three more "long shot" points ahead in s (s+30, s+60, s+90), a total of 6 points are used as anchor points for spline fitting. Using of waypoints from previous path guarantees smooth transition at boundary as the latency between program and simulator is inherent. BTW, I tried to only use last 2 waypoints from previous path, jerks will occasionally witnessed in verification runs. Using last 3 waypoints resolved that.
+To minimizing jerk, for simplicity implementation no JMT is used here, last 3 waypoints (if avail) from previous paths are used, then adding three more "long shot" points ahead in s (s+30, s+60, s+90), a total of 6 points are used as anchor points for spline fitting. These waypoints are acquired in global X,Y coordinates, for conveniences, we first convert them to car coordinates that origin point sits at the last waypoint from last round. After all waypoints generated done, they are converted back to global coordindates before posting to simulator. 
+
+Using of waypoints from previous path guarantees smooth transition at boundary as the latency between program and simulator is inherent. BTW, I tried to only use last 2 waypoints from previous path, jerks will occasionally witnessed in verification runs. Using last 3 waypoints resolved that.
 
 Another heuristic method involved to minimize jerk is to evenly divide the Euclidean distance between 50 new points as below diagram shows (curtersy to Udacity Q&A video session on this project). It is not accurate math method to track jerk, but it works and simple enough.
 

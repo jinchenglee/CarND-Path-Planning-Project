@@ -274,6 +274,7 @@ int main() {
           	double car_d = j[1]["d"];
           	double car_yaw = j[1]["yaw"];
           	double car_speed = j[1]["speed"];
+            //std::cout << "car_s = " << car_s << std::endl;
 
           	// Previous path data given to the Planner
           	auto previous_path_x = j[1]["previous_path_x"];
@@ -313,54 +314,52 @@ int main() {
             double left_bwd_closest = 5000;
             double right_fwd_closest = 5000;
             double right_bwd_closest = 5000;
-            // Do not consider lane change at loop start/end
-            if (car_s>50 && car_s<6900)
+            // Sensor fustion processing
+            for(int i=0; i<sensor_fusion.size(); i++)
             {
-                // Sensor fustion processing
-                for(int i=0; i<sensor_fusion.size(); i++)
+                float d = sensor_fusion[i][6];
+
+                double vx = sensor_fusion[i][3];
+                double vy = sensor_fusion[i][4];
+                double other_car_speed = sqrt(vx*vx+vy*vy);
+                double other_car_s = sensor_fusion[i][5];
+                // Compensate for previous points on car_in_lane
+                other_car_s += ((double)path_size*0.02*other_car_speed);
+
+                // left to ego lane
+                if (lane>0)
                 {
-                    float d = sensor_fusion[i][6];
-
-                    double vx = sensor_fusion[i][3];
-                    double vy = sensor_fusion[i][4];
-                    double other_car_speed = sqrt(vx*vx+vy*vy);
-                    double other_car_s = sensor_fusion[i][5];
-                    // Compensate for previous points on car_in_lane
-                    other_car_s += ((double)path_size*0.02*other_car_speed);
-
-                    // left to ego lane
-                    if (lane>0)
+                    if (d<(2+4*(lane-1)+2) && d>(2+4*(lane-1)-2))
                     {
-                        if (d<(2+4*(lane-1)+2) && d>(2+4*(lane-1)-2))
-                        {
-                            if (other_car_s>car_s && (other_car_s-car_s)<left_fwd_closest)
-                                left_fwd_closest = other_car_s-car_s;
-                            else if (other_car_s<car_s && (car_s-other_car_s)<left_bwd_closest)
-                                left_bwd_closest = car_s-other_car_s;
-                        }
+                        if (other_car_s>car_s && (other_car_s-car_s)<left_fwd_closest)
+                            left_fwd_closest = other_car_s-car_s;
+
+                        if (other_car_s<car_s && (car_s-other_car_s)<left_bwd_closest)
+                            left_bwd_closest = car_s-other_car_s;
                     }
+                }
 
-                    // right to ego lane
-                    if (lane<2)
+                // right to ego lane
+                if (lane<2)
+                {
+                    if (d<(2+4*(lane+1)+2) && d>(2+4*(lane+1)-2))
                     {
-                        if (d<(2+4*(lane+1)+2) && d>(2+4*(lane+1)-2))
-                        {
-                            if (other_car_s>car_s && (other_car_s-car_s)<right_fwd_closest)
-                                right_fwd_closest = other_car_s-car_s;
-                            else if (other_car_s<car_s && (car_s-other_car_s)<right_bwd_closest)
-                                right_bwd_closest = car_s-other_car_s;
-                        }
+                        if (other_car_s>car_s && (other_car_s-car_s)<right_fwd_closest)
+                            right_fwd_closest = other_car_s-car_s;
+
+                        if (other_car_s<car_s && (car_s-other_car_s)<right_bwd_closest)
+                            right_bwd_closest = car_s-other_car_s;
                     }
+                }
 
-                    // Other vehicle in current ego lane
-                    if (d<(2+4*lane+2) && d>(2+4*lane-2) )
+                // Other vehicle in current ego lane
+                if (d<(2+4*lane+2) && d>(2+4*lane-2) )
+                {
+                    // Check collision with the car_in_lane
+                    if ((other_car_s>car_s) && ((other_car_s-car_s)<30))
                     {
-                        // Check collision with the car_in_lane
-                        if ((other_car_s>car_s) && ((other_car_s-car_s)<30))
-                        {
-                            too_close = true;
-                            close_dist = other_car_s-car_s;
-                        }
+                        too_close = true;
+                        close_dist = other_car_s-car_s;
                     }
                 }
             }
@@ -368,10 +367,12 @@ int main() {
             // Speed adjustment - 0.4 delta translates to ~3m/s^2 acceleration in simulator
             if (too_close)
                 ref_v -= min(0.8, 10.0/close_dist); // Slow down faster
-		if (ref_v<0.0)
-		    ref_v = 0.0;
             else if (ref_v < 49.5)
-                ref_v += 0.3;
+                ref_v += 0.5;
+            if (close_dist < 5.0) // Maximum slowing down
+                ref_v -= 1.0;
+            if (ref_v<0.0)  // Under-flow protection
+                ref_v = 0.0;
 
             // Initial start up flag
             if (car_speed > 25.0 && ~startup_done && too_close)
@@ -381,26 +382,47 @@ int main() {
             }
 
             // Speed lower than threshold and safe to change lane, then change
-            if (car_speed<45.0 && close_dist<30.0 && startup_done)
+            // Not too close, not too far, to be safe.
+            if (car_speed<45.0 && close_dist<30.0 && startup_done && close_dist>10.0)
             {
                 // Only change lane when previous lane change completed.
                 // Please be noticed that condition is a bit stricter (only if car sits around lane center).
                 bool lane_change_completed = car_d<(2+4*target_lane+1) && car_d>(2+4*target_lane-1);
                 //std::cout << "Lane change completed. Current lane: " << target_lane << std::endl;
 
-                if (lane_change_completed)
+                // Do not consider lane change at loop start/end or too slow speed
+                if (lane_change_completed && car_s>50 && car_s<6900 && car_speed>35)
                 {
-                    if (lane>0 && left_fwd_closest>30 && left_bwd_closest>15) // left lane avail
+                    bool turn_left=false;
+                    bool turn_right=false;
+
+                    if (lane>0 && left_fwd_closest>30 && left_bwd_closest>20) // left lane avail
+                        turn_left = true;
+                    if (lane<2 && right_fwd_closest>30 && right_bwd_closest>20) // right lane avail
+                        turn_right = true;
+
+                    if (
+                        ((turn_left && (!turn_right))) || // Only left avail
+                        ((turn_left && turn_right) && (left_fwd_closest>right_fwd_closest)) // left lane more margin
+                       )
                     {
                         lane -= 1;
                         target_lane = lane;
                         std::cout << "Trigger left lane change to LANE " << target_lane << std::endl;
+                        std::cout << "\tturn_left:" << int(turn_left) << ", turn_right:" << int(turn_right) << std::endl;
+                        std::cout << "\tleft_fwd_closest:" << left_fwd_closest << ", right_fwd_closest:" << right_fwd_closest << std::endl;
                     }
-                    else if (lane<2 && right_fwd_closest>30 && right_bwd_closest>15) // right lane avail
+
+                    if (
+                        ((turn_right && (!turn_left))) || // Only right avail
+                        ((turn_right && turn_left) && (right_fwd_closest>left_fwd_closest)) // right lane more margin
+                       )
                     {
                         lane += 1;
                         target_lane = lane;
                         std::cout << "Trigger right lane change to LANE " << target_lane << std::endl;
+                        std::cout << "\tturn_left:" << int(turn_left) << ", turn_right:" << int(turn_right) << std::endl;
+                        std::cout << "\tleft_fwd_closest:" << left_fwd_closest << ", right_fwd_closest:" << right_fwd_closest << std::endl;
                     }
                 }
             }
